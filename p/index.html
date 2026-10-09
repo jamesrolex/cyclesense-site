@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta name="robots" content="noindex, nofollow">
+<title>Cycle Sense note</title>
+<style>
+  :root { --ground:#F1EFEA; --paper:#FFFDF9; --ink:#16201C; --ink2:#56625D; --accent:#2F5D50; --line:#E3DFD6; }
+  @media (prefers-color-scheme: dark) { :root { --ground:#111816; --paper:#1A2420; --ink:#ECEFEB; --ink2:#A3B0AA; --accent:#7FB3A2; --line:#2A3631; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--ground); color:var(--ink); font:17px/1.55 -apple-system, system-ui, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 640px; margin: 0 auto; padding: 32px 16px 64px; }
+  .eyebrow { font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: var(--accent); font-weight: 600; }
+  h1 { font-family: "New York", Georgia, serif; font-weight: 400; font-size: 34px; line-height: 1.15; margin: 6px 0 20px; }
+  .card { background: var(--paper); border-radius: 22px; padding: 22px; margin: 16px 0; }
+  .quote { font-family: "New York", Georgia, serif; font-size: 24px; line-height: 1.35; margin: 0; white-space: pre-wrap; }
+  h2 { font-family: "New York", Georgia, serif; font-weight: 400; font-size: 22px; margin: 6px 0 8px; }
+  ul { padding-left: 1.1em; margin: 10px 0; } li { margin: 6px 0; }
+  .muted { color: var(--ink2); font-size: 14px; }
+  .avoid { border-top: 1px solid var(--line); padding-top: 10px; margin-top: 10px; }
+</style>
+</head>
+<body>
+<main id="app">
+  <p class="eyebrow">Cycle Sense</p>
+  <h1>Opening your note…</h1>
+</main>
+<script>
+// Read-only viewer. The key is in the #fragment, which browsers never send to any server.
+// iCloud returns ciphertext; it is opened here, in this browser, and nowhere else.
+const CONTAINER = "iCloud.com.jamesrolex.cyclesense";
+const API_TOKEN = "53540f8ad87a49a1f6db4ad6fde763bc8f901832622f96f477ef30db40c2ea35";
+const app = document.getElementById("app");
+
+function esc(s) { return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+function show(title, body) {
+  app.innerHTML = `<p class="eyebrow">Cycle Sense</p><h1>${esc(title)}</h1>${body || ""}
+    <p class="muted">Read-only. Notes disappear after 48 hours. Only someone with this link can open it.</p>`;
+}
+function b64urlToBytes(s) {
+  s = s.replace(/-/g, "+").replace(/_/g, "/"); while (s.length % 4) s += "=";
+  return Uint8Array.from(atob(s), c => c.charCodeAt(0));
+}
+
+async function main() {
+  const [id, keyText] = location.hash.slice(1).split(".");
+  if (!/^[0-9a-f]{32}$/.test(id || "") || !keyText) return show("This link isn’t complete", "<p>Ask for the link again and open it exactly as sent.</p>");
+
+  let res;
+  try {
+    res = await fetch(`https://api.apple-cloudkit.com/database/1/${CONTAINER}/production/public/records/lookup?ckAPIToken=${API_TOKEN}`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ records: [{ recordName: id }], desiredKeys: ["ct"] })
+    }).then(r => r.json());
+  } catch { return show("Couldn’t connect", "<p>Check you’re online and refresh.</p>"); }
+
+  const rec = res && res.records && res.records[0];
+  if (!rec || rec.serverErrorCode === "NOT_FOUND") return show("No note here", "<p>There’s no note yet today, or this link has been turned off.</p>");
+  if (rec.serverErrorCode) return show("Couldn’t open the note", "<p>Please try again in a minute.</p>");
+
+  let p;
+  try {
+    const sealed = Uint8Array.from(atob(rec.fields.ct.value), c => c.charCodeAt(0));
+    const key = await crypto.subtle.importKey("raw", b64urlToBytes(keyText), "AES-GCM", false, ["decrypt"]);
+    const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: sealed.slice(0, 12) }, key, sealed.slice(12));
+    p = JSON.parse(new TextDecoder().decode(plain));
+  } catch { return show("This link can’t open the note", "<p>It may have been replaced. Ask for the latest link.</p>"); }
+
+  if (new Date(p.expiresAt) < new Date()) return show("No note yet today", `<p>${esc(p.from || "They")} hasn’t sent one since yesterday.</p>`);
+
+  const when = new Date(p.sentAt).toLocaleString([], { weekday: "long", hour: "2-digit", minute: "2-digit" });
+  let html = `<div class="card"><p class="eyebrow">Today’s note · ${esc(when)}</p><p class="quote">“${esc(p.body)}”</p></div>`;
+  if (p.guide) {
+    html += `<div class="card"><p class="eyebrow">How to help · ${esc(p.week || "")}</p><h2>${esc(p.guide.title)}</h2>
+      <p>${esc(p.guide.whatsGoingOn)}</p><ul>${p.guide.ideas.map(i => `<li>${esc(i)}</li>`).join("")}</ul>
+      <p class="avoid">Avoid: ${esc(p.guide.avoid)}</p>
+      <p class="muted">General guidance about cycles, not ${esc(p.from)}’s health data. Everyone’s different, so ask.</p></div>`;
+  }
+  show(`From ${p.from || "them"}`, html);
+}
+main();
+</script>
+</body>
+</html>
